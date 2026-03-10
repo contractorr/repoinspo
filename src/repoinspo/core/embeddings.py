@@ -32,6 +32,7 @@ class EmbeddingIndex:
         items: list[ItemT],
         texts: list[str],
         top_k: int,
+        min_similarity: float = 0.3,
     ) -> list[ItemT]:
         """Rank items by cosine similarity against a query text."""
 
@@ -46,8 +47,12 @@ class EmbeddingIndex:
 
         query_vector = np.asarray(await self._embed([query]), dtype="float32")
         faiss.normalize_L2(query_vector)
-        _, indices = self._index.search(query_vector, min(top_k, len(items)))
-        return [items[index] for index in indices[0] if index != -1]
+        distances, indices = self._index.search(query_vector, min(top_k, len(items)))
+        return [
+            items[idx]
+            for idx, dist in zip(indices[0], distances[0])
+            if idx != -1 and dist >= min_similarity
+        ]
 
     def save(self) -> None:
         if self._index is None:

@@ -32,6 +32,9 @@ def test_settings_parse_comma_separated_models(tmp_path: Path) -> None:
 
 
 class FakeGitHubClient:
+    def __init__(self) -> None:
+        self.search_queries: list[str] = []
+
     async def get_repo_metadata(self, full_names: list[str]) -> list[RepoMetadata]:
         return [
             RepoMetadata(
@@ -54,7 +57,8 @@ class FakeGitHubClient:
         per_page: int = 10,
         filters: SearchFilters | None = None,
     ) -> list[RepoMetadata]:
-        del sort, per_page, filters, query
+        del sort, per_page, filters
+        self.search_queries.append(query)
         return [
             RepoMetadata(
                 full_name="octo/sim-one",
@@ -81,6 +85,9 @@ class FakeGitHubClient:
     async def get_readme(self, full_name: str) -> str:
         return f"# {full_name}"
 
+    async def close(self) -> None:
+        pass
+
 
 async def _fake_ingester(source: str, token: str | None = None) -> tuple[str, str, str]:
     del token
@@ -89,7 +96,7 @@ async def _fake_ingester(source: str, token: str | None = None) -> tuple[str, st
 
 async def _fake_completion(**kwargs: object) -> dict[str, object]:
     prompt = str(kwargs["messages"][0]["content"])
-    if "generate diverse github search strategies" in prompt.lower():
+    if "generate github search queries" in prompt.lower():
         return {
             "choices": [
                 {
@@ -377,6 +384,7 @@ async def test_generate_search_strategies_returns_empty_on_low_budget() -> None:
 
 async def test_find_similar_repos_uses_strategies() -> None:
     settings = Settings(CACHE_DIR="cache", LLM_MODELS="gpt-4o-mini")
+    client = FakeGitHubClient()
     strategies = [
         SearchStrategy(query="plugin architecture", strategy_type="lateral", rationale="test"),
     ]
@@ -385,10 +393,108 @@ async def test_find_similar_repos_uses_strategies() -> None:
         repo_url="https://github.com/octo/seed",
         n=2,
         settings=settings,
-        github_client=FakeGitHubClient(),
+        github_client=client,
         embedding_func=_fake_embedding,
         ingester=_fake_ingester,
         strategies=strategies,
     )
 
     assert len(repos) == 2
+
+
+async def test_find_similar_repos_runs_static_and_strategy_queries() -> None:
+    """Both static baseline and strategy queries should fire."""
+    settings = Settings(CACHE_DIR="cache", LLM_MODELS="gpt-4o-mini")
+    client = FakeGitHubClient()
+    strategies = [
+        SearchStrategy(query="plugin architecture", strategy_type="lateral", rationale="test"),
+        SearchStrategy(query="topic:cli language:python", strategy_type="direct", rationale="test"),
+    ]
+
+    await find_similar_repos(
+        repo_url="https://github.com/octo/seed",
+        n=2,
+        settings=settings,
+        github_client=client,
+        embedding_func=_fake_embedding,
+        ingester=_fake_ingester,
+        strategies=strategies,
+    )
+
+    # 1 static + 2 strategy = 3 queries
+    assert len(client.search_queries) == 3
+    # First query is always the static baseline (contains topic: qualifiers)
+    assert "topic:" in client.search_queries[0]
+    assert "plugin architecture" in client.search_queries[1:]
+    assert "topic:cli language:python" in client.search_queries[1:]
+
+
+async def test_find_similar_repos_runs_static_only_without_strategies() -> None:
+    """Without strategies, only static baseline should fire."""
+    settings = Settings(CACHE_DIR="cache", LLM_MODELS="gpt-4o-mini")
+    client = FakeGitHubClient()
+
+    await find_similar_repos(
+        repo_url="https://github.com/octo/seed",
+        n=2,
+        settings=settings,
+        github_client=client,
+        embedding_func=_fake_embedding,
+        ingester=_fake_ingester,
+    )
+
+    assert len(client.search_queries) == 1
+
+
+def test_cli_output_file_writes_to_disk(monkeypatch, tmp_path: Path) -> None:
+    async def fake_scout_ideas(**_: object) -> ScoutResult:
+        repo = RepoMetadata(
+            full_name="octo/seed",
+            name="seed",
+            owner="octo",
+            html_url="https://github.com/octo/seed",
+        )
+        analysis = RepoAnalysis(
+            repo=repo,
+            purpose="Analyze repos",
+            architecture="Async pipeline",
+            features=[],
+            tech_stack=[],
+            notable_patterns=[],
+            summary="Seed summary",
+        )
+        return ScoutResult(
+            seed_repo=repo,
+            seed_analysis=analysis,
+            similar_repos=[],
+            feature_reports=[FeatureExtractionResult(repo=repo, features=[])],
+            prioritized_ideas=[
+                PortableIdea(
+                    title="Async ingestion",
+                    description="Parallel repo ingestion",
+                    priority_score=9,
+                    rationale="High impact",
+                    source_repo="octo/sim-one",
+                    related_features=[],
+                )
+            ],
+            comparisons=[],
+            budget=TokenBudget(max_tokens_per_run=1000),
+            partial=False,
+            notes=[],
+        )
+
+    monkeypatch.setattr("repoinspo.core.pipeline.scout_ideas", fake_scout_ideas)
+    runner = CliRunner()
+    out_file = tmp_path / "report.md"
+
+    result = runner.invoke(
+        cli.app,
+        ["run", "https://github.com/octo/seed", "--output", "md", "--output-file", str(out_file)],
+    )
+
+    assert result.exit_code == 0
+    assert out_file.exists()
+    content = out_file.read_text()
+    assert "octo/seed" in content
+    assert "Async ingestion" in content

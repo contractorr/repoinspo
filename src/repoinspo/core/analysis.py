@@ -164,7 +164,21 @@ async def prioritize_ideas(
         settings=settings,
         completion_func=completion_func,
     )
-    return [PortableIdea.model_validate(item) for item in data.get("prioritized_ideas", [])]
+    ideas = [PortableIdea.model_validate(item) for item in data.get("prioritized_ideas", [])]
+
+    # Cap ideas per source repo — no single repo > 50% of total
+    if len(ideas) > 1:
+        max_per_repo = max(len(ideas) // 2, 1)
+        repo_counts: dict[str, int] = {}
+        capped: list[PortableIdea] = []
+        for idea in ideas:
+            count = repo_counts.get(idea.source_repo, 0)
+            if count < max_per_repo:
+                capped.append(idea)
+                repo_counts[idea.source_repo] = count + 1
+        ideas = capped
+
+    return ideas
 
 
 async def generate_search_strategies(

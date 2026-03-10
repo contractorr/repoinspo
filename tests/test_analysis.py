@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from repoinspo.config import Settings
 from repoinspo.core.analysis import (
     _parse_json_response,
@@ -287,3 +289,51 @@ async def test_prioritize_ideas_returns_portable_ideas() -> None:
     )
 
     assert ideas[0].title == "Hybrid search"
+
+
+async def test_prioritize_ideas_caps_per_repo() -> None:
+    """6 ideas all from same repo should be capped to 3 (50%)."""
+    budget = TokenBudget(max_tokens_per_run=500)
+
+    async def _overloaded_completion(**_: object) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps({
+                            "prioritized_ideas": [
+                                {
+                                    "title": f"Idea {i}",
+                                    "description": f"Desc {i}",
+                                    "priority_score": 10 - i,
+                                    "rationale": "Good",
+                                    "source_repo": "octo/same-repo",
+                                    "related_features": [],
+                                }
+                                for i in range(6)
+                            ]
+                        })
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 50},
+        }
+
+    ideas = await prioritize_ideas(
+        [
+            await extract_features(
+                _make_ingested_repo("example"),
+                "test",
+                TokenBudget(max_tokens_per_run=500),
+                completion_func=_feature_completion,
+            )
+        ],
+        "test",
+        budget,
+        completion_func=_overloaded_completion,
+    )
+
+    assert len(ideas) == 3
+    # Preserves priority ordering (highest first)
+    assert ideas[0].title == "Idea 0"
+    assert ideas[2].title == "Idea 2"

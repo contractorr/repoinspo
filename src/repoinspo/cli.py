@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
@@ -44,6 +45,7 @@ def run_command(
     topic: Annotated[list[str] | None, typer.Option("--topic")] = None,
     archived: Annotated[bool | None, typer.Option("--archived")] = None,
     license_name: Annotated[str | None, typer.Option("--license")] = None,
+    output_file: Annotated[Path | None, typer.Option("--output-file", help="Write output to file.")] = None,
 ) -> None:
     """Run the full scouting pipeline from the CLI."""
 
@@ -68,7 +70,7 @@ def run_command(
             ),
         )
     )
-    _render_result(result, output)
+    _render_result(result, output, output_file=output_file)
 
 
 @app.command("serve")
@@ -148,14 +150,26 @@ def _to_datetime(value: date | None) -> datetime | None:
     return datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC)
 
 
-def _render_result(result: ScoutResult, output: Literal["pretty", "json", "md"]) -> None:
+def _render_result(
+    result: ScoutResult,
+    output: Literal["pretty", "json", "md"],
+    output_file: Path | None = None,
+) -> None:
     if output == "json":
-        console.print_json(json.dumps(result.model_dump(mode="json"), indent=2))
+        rendered = json.dumps(result.model_dump(mode="json"), indent=2)
+        console.print_json(rendered)
+        if output_file:
+            output_file.write_text(rendered)
         return
     if output == "md":
-        console.print(_render_markdown(result))
+        rendered = _render_markdown(result)
+        console.print(rendered)
+        if output_file:
+            output_file.write_text(rendered)
         return
     _render_pretty(result)
+    if output_file:
+        output_file.write_text(_render_markdown(result))
 
 
 def _render_pretty(result: ScoutResult) -> None:

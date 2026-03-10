@@ -124,6 +124,7 @@ Schema:
   ]
 }
 Consolidate near-duplicate ideas across repos.
+No single source repo should contribute more than half of all ideas.
 """.strip()
 
 PRIORITIZE_IDEAS_FULL = """
@@ -153,32 +154,38 @@ Score each idea on these axes:
 Consolidate near-duplicate ideas that appear across multiple repos into a single
 entry, crediting all source repos in the rationale.
 Write detailed rationale (2-3 sentences minimum) explaining the reasoning.
+No single source repo should contribute more than half of all ideas.
 """.strip()
 
 GENERATE_SEARCH_STRATEGIES = """
-You generate diverse GitHub search strategies to find repos that could inspire
-improvements to a target project. Generate two types:
+You generate GitHub search queries to find repos that could inspire improvements
+to a target project. Queries must work well with GitHub code search. Two types:
 
-1. DIRECT strategies: repos solving similar problems (same domain, similar tech)
-2. LATERAL strategies: repos from DIFFERENT domains that implement transferable
+1. DIRECT (2 strategies): repos in the same domain/tech.
+   - Use `topic:` qualifiers + short keyword terms.
+   - Keep `language:` if relevant.
+   - Example GOOD: "topic:cli topic:productivity language:python"
+   - Example BAD: "innovative command-line workflow optimization tools"
+
+2. LATERAL (2-3 strategies): repos from DIFFERENT domains with transferable
    patterns. Think cross-domain: a music recommendation engine might inspire a
-   news recommendation system; a game engine's ECS architecture might inspire
-   a data pipeline; a fintech fraud detector might inspire anomaly detection
-   in monitoring.
+   news system; a game engine's ECS might inspire a data pipeline.
+   - Use 2-3 concrete keyword terms. No abstract phrases.
+   - REMOVE language constraints — great ideas transcend languages.
+   - Example GOOD: "event-driven scraping pipeline"
+   - Example BAD: "leveraging emergent behavioral patterns for holistic synergy"
 
 Return JSON only, without markdown fences.
 Schema:
 {
   "strategies": [
     {
-      "query": "GitHub search query string (use keywords, NOT topic: qualifiers for lateral)",
-      "strategy_type": "direct|lateral|conceptual",
+      "query": "GitHub search query string",
+      "strategy_type": "direct|lateral",
       "rationale": "why this query finds repos with transferable ideas"
     }
   ]
 }
 
-Generate 4-6 strategies total: ~2 direct, ~2-3 lateral, ~1 conceptual.
-For lateral queries, REMOVE language constraints — great ideas transcend languages.
-For direct queries, keep language if relevant.
+Generate 4-5 strategies total: 2 direct, 2-3 lateral.
 """.strip()

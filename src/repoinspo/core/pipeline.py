@@ -44,8 +44,8 @@ async def find_similar_repos(
 ) -> list[RepoMetadata]:
     """Find similar repositories using keyword search and embedding reranking.
 
-    If strategies are provided, runs each strategy's query and merges results.
-    Falls back to static _build_search_query when no strategies are given.
+    Always runs a static baseline query. If strategies are provided, also runs
+    each strategy's query concurrently and merges into the same candidate pool.
     """
 
     config = settings or get_settings()
@@ -62,30 +62,30 @@ async def find_similar_repos(
             ingester=ingester,
         )
 
+        # Always run static baseline
+        static_query = GitHubClient._build_search_query(seed.metadata, filters or SearchFilters())
+        static_limit = min(max(n * 5, 10), 100)
+        search_tasks: list = [client.search_repos(static_query, per_page=static_limit)]
+
+        # Also run strategy queries if available
         if strategies:
-            per_query_limit = min(max(n * 3, 10), 30)
-            search_tasks = [
+            per_query_limit = min(max(n * 5, 15), 60)
+            search_tasks.extend(
                 client.search_repos(s.query, per_page=per_query_limit)
                 for s in strategies
-            ]
-            results = await asyncio.gather(*search_tasks, return_exceptions=True)
-            seen: set[str] = set()
-            candidates: list[RepoMetadata] = []
-            for result in results:
-                if isinstance(result, Exception):
-                    logger.warning("Strategy search failed: %s", result)
-                    continue
-                for repo in result:
-                    if repo.full_name != seed.metadata.full_name and repo.full_name not in seen:
-                        seen.add(repo.full_name)
-                        candidates.append(repo)
-        else:
-            query = GitHubClient._build_search_query(seed.metadata, filters or SearchFilters())
-            search_limit = min(max(n * 5, 10), 100)
-            candidates = await client.search_repos(query, per_page=search_limit)
-            candidates = [
-                repo for repo in candidates if repo.full_name != seed.metadata.full_name
-            ]
+            )
+
+        results = await asyncio.gather(*search_tasks, return_exceptions=True)
+        seen: set[str] = set()
+        candidates: list[RepoMetadata] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("Search query failed: %s", result)
+                continue
+            for repo in result:
+                if repo.full_name != seed.metadata.full_name and repo.full_name not in seen:
+                    seen.add(repo.full_name)
+                    candidates.append(repo)
 
         if not candidates:
             return []
