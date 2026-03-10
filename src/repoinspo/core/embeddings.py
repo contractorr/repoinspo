@@ -63,7 +63,28 @@ class EmbeddingIndex:
     def load(self) -> None:
         self._index = faiss.read_index(str(self.persist_path))
 
-    async def _embed(self, inputs: list[str]) -> list[list[float]]:
-        response = await self.embedding_func(model=self.model, input=inputs)
-        data = response["data"] if isinstance(response, dict) else response.data
-        return [item["embedding"] if isinstance(item, dict) else item.embedding for item in data]
+    async def _embed(self, inputs: list[str], _max_batch_tokens: int = 7000) -> list[list[float]]:
+        batches: list[list[str]] = []
+        current_batch: list[str] = []
+        current_tokens = 0
+        for text in inputs:
+            # rough estimate: 1 token ≈ 4 chars
+            est = len(text) // 4 + 1
+            if current_batch and current_tokens + est > _max_batch_tokens:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+            current_batch.append(text)
+            current_tokens += est
+        if current_batch:
+            batches.append(current_batch)
+
+        all_embeddings: list[list[float]] = []
+        for batch in batches:
+            response = await self.embedding_func(model=self.model, input=batch)
+            data = response["data"] if isinstance(response, dict) else response.data
+            all_embeddings.extend(
+                item["embedding"] if isinstance(item, dict) else item.embedding
+                for item in data
+            )
+        return all_embeddings
