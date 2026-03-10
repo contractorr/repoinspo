@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "repoinspo"
 version = "0.1.0"
 description = "Analyze repositories, find similar projects, and surface portable ideas."
-readme = "PLAN.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
@@ -44,7 +44,7 @@ packages = ["src/repoinspo"]
 include = [
   "/src",
   "/tests",
-  "/PLAN.md",
+  "/README.md",
   "/LICENSE",
   "/.env.example",
 ]
