@@ -48,18 +48,20 @@ repoinspo/
 
 ### Phase 1: Skeleton + Config + Models
 - [ ] Init repo, pyproject.toml w/ all deps
-- [ ] `config.py` — Settings (github_token, llm_model, embedding_model, cache_dir, max_tokens)
-- [ ] `models.py` — RepoMetadata, IngestedRepo, RepoAnalysis, ExtractedFeature, PortableIdea, ScoutResult
+- [ ] `config.py` — Settings (github_token, llm_model, embedding_model, cache_dir, max_tokens, default_token_budget)
+- [ ] `models.py` — RepoMetadata, IngestedRepo, RepoAnalysis, ExtractedFeature, PortableIdea, ScoutResult, SearchFilters, TokenBudget
 - [ ] `prompts.py` — stub constants
 - [ ] Verify `pip install -e .` works
 
 ### Phase 2: GitHub Client
 - [ ] `core/github.py` — async GitHubClient w/ httpx
-- [ ] `search_repos(query, sort, per_page)` via REST `GET /search/repositories`
+- [ ] `search_repos(query, sort, per_page, filters)` via REST `GET /search/repositories`
+- [ ] `SearchFilters` model — created_after, created_before, pushed_after, min_stars, max_stars, language, topics, archived (bool), license
+- [ ] Filters map to GitHub search qualifiers: `created:>2023-01-01`, `stars:100..5000`, `language:python`, `archived:false`, etc.
 - [ ] `get_repo_metadata(full_names)` via GraphQL batch
 - [ ] `get_readme(full_name)` w/ ETag caching in SQLite
 - [ ] Rate-limit middleware (sleep when X-RateLimit-Remaining < 5)
-- [ ] `_build_search_query(seed_repo)` — constructs `topic:X language:Y stars:>N`
+- [ ] `_build_search_query(seed_repo, filters)` — constructs `topic:X language:Y stars:>N created:>DATE`
 
 ### Phase 3: Ingestion
 - [ ] `core/ingestion.py` — `ingest_repo(repo, max_tokens)`
@@ -68,16 +70,18 @@ repoinspo/
 - [ ] Fallback: `subprocess repomix --remote --compress` if available
 
 ### Phase 4: LLM Analysis (core value)
-- [ ] `core/analysis.py` — all litellm.acompletion() calls
-- [ ] `analyze_repo(ingested)` → RepoAnalysis
-- [ ] `extract_features(ingested, target_context)` → FeatureExtractionResult
-- [ ] `compare_repos(a, b)` → RepoComparison
-- [ ] `prompts.py` — finalize ANALYZE_REPO, EXTRACT_FEATURES, COMPARE_REPOS, PRIORITIZE_IDEAS templates
+- [ ] `core/analysis.py` — all litellm.acompletion() calls, budget-aware
+- [ ] `TokenBudget` model — max_tokens_per_run (total ceiling), track usage across calls via `litellm` response `usage.total_tokens`, stop early when budget exhausted
+- [ ] Budget controls depth: low budget → analyze fewer repos, use shorter prompts, skip comparison step. High budget → full deep analysis of all candidates
+- [ ] `analyze_repo(ingested, budget)` → RepoAnalysis
+- [ ] `extract_features(ingested, target_context, budget)` → FeatureExtractionResult
+- [ ] `compare_repos(a, b, budget)` → RepoComparison
+- [ ] `prompts.py` — finalize ANALYZE_REPO, EXTRACT_FEATURES, COMPARE_REPOS, PRIORITIZE_IDEAS templates (short + full variants)
 - [ ] `_parse_json_response()` — strip markdown fences, validate w/ Pydantic
 
 ### Phase 5: MVP CLI
 - [ ] `cli.py` — Typer app
-- [ ] `repoinspo run <url> [-n 5] [--context "..."] [--model "..."] [--output pretty|json|md]`
+- [ ] `repoinspo run <url> [-n 5] [--context "..."] [--model "..."] [--output pretty|json|md] [--budget 100000] [--created-after 2023-01-01] [--min-stars 50] [--language python]`
 - [ ] `repoinspo serve [--transport stdio|http]`
 - [ ] Smoke test end-to-end
 
@@ -105,10 +109,10 @@ repoinspo/
 | Tool | Input | Output | Description |
 |---|---|---|---|
 | `analyze_repo` | `repo_url` | RepoAnalysis | Purpose, architecture, features, tech stack |
-| `find_similar_repos` | `repo_url, n` | list[RepoMetadata] | Keyword search + embedding rerank |
+| `find_similar_repos` | `repo_url, n, filters?` | list[RepoMetadata] | Keyword search + embedding rerank, filterable |
 | `extract_features` | `repo_url, target_context?` | list[ExtractedFeature] | Portable features w/ portability scores 1-10 |
 | `compare_repos` | `repo_a_url, repo_b_url` | RepoComparison | Common patterns, unique features, recommendation |
-| `scout_ideas` | `repo_url, n_similar, target_context?` | ScoutResult | Full pipeline → prioritized portable ideas |
+| `scout_ideas` | `repo_url, n_similar, target_context?, budget?, filters?` | ScoutResult | Full pipeline → prioritized portable ideas |
 
 ## Key Architectural Decisions
 
@@ -116,6 +120,8 @@ repoinspo/
 - **Hybrid search** — GitHub REST keyword search (fast, up to 1000 results) then embed + FAISS cosine rerank top-100. Cheaper and more reliable than pure embedding search.
 - **Single GitHubClient via MCP lifespan** — one httpx.AsyncClient at startup, reused by all tool calls. Avoids TCP overhead, respects connection pools.
 - **Two-pass analysis** — shallow scan (README + file tree) for discovery, deep scan (full content via gitingest) only for top-N candidates. Controls cost.
+- **Token budget system** — `TokenBudget(max_tokens=100000)` passed through the pipeline. Each litellm call's `response.usage.total_tokens` is accumulated. Pipeline adapts: low budget → fewer repos analyzed, shorter prompts, skip compare step. Budget exhaustion stops gracefully and returns partial results. Default budget configurable in `.env` or per-run via `--budget`.
+- **Search filters** — `SearchFilters` Pydantic model maps directly to GitHub search qualifiers. CLI exposes as flags (`--created-after`, `--min-stars`, `--language`), MCP tools accept as optional dict. Filters applied in `_build_search_query()` before any API call.
 
 ## Verification
 
