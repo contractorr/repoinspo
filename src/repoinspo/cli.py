@@ -166,7 +166,24 @@ def _render_pretty(result: ScoutResult) -> None:
     summary.add_row("Purpose", result.seed_analysis.purpose)
     summary.add_row("Architecture", result.seed_analysis.architecture)
     summary.add_row("Summary", result.seed_analysis.summary or "")
+    if result.seed_analysis.strengths:
+        summary.add_row("Strengths", "\n".join(f"+ {s}" for s in result.seed_analysis.strengths))
+    if result.seed_analysis.weaknesses:
+        summary.add_row("Weaknesses", "\n".join(f"- {w}" for w in result.seed_analysis.weaknesses))
+    if result.seed_analysis.opportunities:
+        summary.add_row(
+            "Opportunities", "\n".join(f"* {o}" for o in result.seed_analysis.opportunities)
+        )
     console.print(summary)
+
+    if result.search_strategies:
+        strat_table = Table(title="Search Strategies")
+        strat_table.add_column("Type")
+        strat_table.add_column("Query")
+        strat_table.add_column("Rationale")
+        for s in result.search_strategies:
+            strat_table.add_row(s.strategy_type, s.query, s.rationale)
+        console.print(strat_table)
 
     similar = Table(title="Similar Repositories")
     similar.add_column("Repository")
@@ -179,9 +196,17 @@ def _render_pretty(result: ScoutResult) -> None:
     ideas = Table(title="Prioritized Ideas")
     ideas.add_column("Idea")
     ideas.add_column("Score", justify="right")
+    ideas.add_column("Complexity")
     ideas.add_column("Source")
+    ideas.add_column("Rationale", max_width=60)
     for idea in result.prioritized_ideas:
-        ideas.add_row(idea.title, str(idea.priority_score), idea.source_repo)
+        ideas.add_row(
+            idea.title,
+            str(idea.priority_score),
+            idea.implementation_complexity or "",
+            idea.source_repo,
+            idea.rationale,
+        )
     console.print(ideas)
 
 
@@ -191,14 +216,40 @@ def _render_markdown(result: ScoutResult) -> str:
         "",
         f"- Purpose: {result.seed_analysis.purpose}",
         f"- Architecture: {result.seed_analysis.architecture}",
-        "",
-        "## Similar Repositories",
     ]
+    if result.seed_analysis.strengths:
+        lines.append("")
+        lines.append("### Strengths")
+        lines.extend(f"- {s}" for s in result.seed_analysis.strengths)
+    if result.seed_analysis.weaknesses:
+        lines.append("")
+        lines.append("### Weaknesses")
+        lines.extend(f"- {w}" for w in result.seed_analysis.weaknesses)
+    if result.seed_analysis.opportunities:
+        lines.append("")
+        lines.append("### Opportunities")
+        lines.extend(f"- {o}" for o in result.seed_analysis.opportunities)
+
+    if result.search_strategies:
+        lines.append("")
+        lines.append("## Search Strategies")
+        for s in result.search_strategies:
+            lines.append(f"- **{s.strategy_type}**: `{s.query}` — {s.rationale}")
+
+    lines.append("")
+    lines.append("## Similar Repositories")
     lines.extend(f"- {repo.full_name} ({repo.stars} stars)" for repo in result.similar_repos)
     lines.append("")
     lines.append("## Prioritized Ideas")
-    lines.extend(
-        f"- {idea.title} ({idea.priority_score}/10) from {idea.source_repo}"
-        for idea in result.prioritized_ideas
-    )
+    for idea in result.prioritized_ideas:
+        lines.append(f"### {idea.title} ({idea.priority_score}/10)")
+        lines.append(f"- Source: {idea.source_repo}")
+        lines.append(f"- Rationale: {idea.rationale}")
+        if idea.implementation_complexity:
+            lines.append(f"- Complexity: {idea.implementation_complexity}")
+        if idea.expected_impact:
+            lines.append(f"- Impact: {idea.expected_impact}")
+        if idea.adaptation_notes:
+            lines.append(f"- Adaptation: {idea.adaptation_notes}")
+        lines.append("")
     return "\n".join(lines)

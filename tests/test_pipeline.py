@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from repoinspo import cli
 from repoinspo.config import Settings
+from repoinspo.core.analysis import generate_search_strategies
 from repoinspo.core.pipeline import find_similar_repos, scout_ideas
 from repoinspo.models import (
     FeatureExtractionResult,
@@ -14,6 +15,7 @@ from repoinspo.models import (
     RepoMetadata,
     ScoutResult,
     SearchFilters,
+    SearchStrategy,
     TokenBudget,
 )
 
@@ -52,8 +54,7 @@ class FakeGitHubClient:
         per_page: int = 10,
         filters: SearchFilters | None = None,
     ) -> list[RepoMetadata]:
-        del sort, per_page, filters
-        assert "topic:mcp" in query
+        del sort, per_page, filters, query
         return [
             RepoMetadata(
                 full_name="octo/sim-one",
@@ -88,6 +89,32 @@ async def _fake_ingester(source: str, token: str | None = None) -> tuple[str, st
 
 async def _fake_completion(**kwargs: object) -> dict[str, object]:
     prompt = str(kwargs["messages"][0]["content"])
+    if "generate diverse github search strategies" in prompt.lower():
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": """
+                        {
+                          "strategies": [
+                            {
+                              "query": "topic:mcp language:python",
+                              "strategy_type": "direct",
+                              "rationale": "Find similar MCP tools"
+                            },
+                            {
+                              "query": "plugin architecture extensible",
+                              "strategy_type": "lateral",
+                              "rationale": "Cross-domain plugin patterns"
+                            }
+                          ]
+                        }
+                        """
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 30},
+        }
     if "analyze software repositories" in prompt.lower():
         return {
             "choices": [
@@ -100,7 +127,10 @@ async def _fake_completion(**kwargs: object) -> dict[str, object]:
                           "features": ["search"],
                           "tech_stack": ["python"],
                           "notable_patterns": ["budgeting"],
-                          "summary": "Seed summary"
+                          "summary": "Seed summary",
+                          "strengths": ["clean async architecture"],
+                          "weaknesses": ["limited test coverage"],
+                          "opportunities": ["plugin system", "caching layer"]
                         }
                         """
                     }
@@ -216,6 +246,12 @@ async def test_scout_ideas_orchestrates_pipeline() -> None:
     )
 
     assert result.seed_analysis.purpose == "Analyze repos"
+    assert result.seed_analysis.strengths == ["clean async architecture"]
+    assert result.seed_analysis.weaknesses == ["limited test coverage"]
+    assert result.seed_analysis.opportunities == ["plugin system", "caching layer"]
+    assert len(result.search_strategies) == 2
+    assert result.search_strategies[0].strategy_type == "direct"
+    assert result.search_strategies[1].strategy_type == "lateral"
     assert len(result.similar_repos) == 2
     assert len(result.feature_reports) == 2
     assert result.prioritized_ideas[0].title == "Async ingestion"
@@ -266,3 +302,93 @@ def test_cli_renders_json_output(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert '"title": "Async ingestion"' in result.stdout
+
+
+async def test_generate_search_strategies_returns_strategies() -> None:
+    budget = TokenBudget(max_tokens_per_run=10000)
+    repo = RepoMetadata(
+        full_name="octo/seed",
+        name="seed",
+        owner="octo",
+        html_url="https://github.com/octo/seed",
+        stars=100,
+        language="Python",
+    )
+    analysis = RepoAnalysis(
+        repo=repo,
+        purpose="Analyze repos",
+        architecture="Async pipeline",
+        strengths=["clean API"],
+        weaknesses=["no caching"],
+        opportunities=["plugin system"],
+    )
+
+    async def _strategy_completion(**_: object) -> dict[str, object]:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": """
+                        {
+                          "strategies": [
+                            {
+                              "query": "topic:analysis language:python",
+                              "strategy_type": "direct",
+                              "rationale": "Same domain"
+                            },
+                            {
+                              "query": "plugin architecture extensible",
+                              "strategy_type": "lateral",
+                              "rationale": "Cross-domain patterns"
+                            }
+                          ]
+                        }
+                        """
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 40},
+        }
+
+    strategies = await generate_search_strategies(
+        analysis, budget, completion_func=_strategy_completion
+    )
+
+    assert len(strategies) == 2
+    assert strategies[0].strategy_type == "direct"
+    assert strategies[1].strategy_type == "lateral"
+    assert budget.tokens_used == 40
+
+
+async def test_generate_search_strategies_returns_empty_on_low_budget() -> None:
+    budget = TokenBudget(max_tokens_per_run=1000, tokens_used=999)
+    repo = RepoMetadata(
+        full_name="octo/seed",
+        name="seed",
+        owner="octo",
+        html_url="https://github.com/octo/seed",
+    )
+    analysis = RepoAnalysis(repo=repo, purpose="test", architecture="test")
+
+    strategies = await generate_search_strategies(analysis, budget)
+
+    assert strategies == []
+
+
+async def test_find_similar_repos_uses_strategies() -> None:
+    settings = Settings(CACHE_DIR="cache", LLM_MODELS="gpt-4o-mini")
+    strategies = [
+        SearchStrategy(query="plugin architecture", strategy_type="lateral", rationale="test"),
+    ]
+
+    repos = await find_similar_repos(
+        repo_url="https://github.com/octo/seed",
+        n=2,
+        settings=settings,
+        github_client=FakeGitHubClient(),
+        embedding_func=_fake_embedding,
+        ingester=_fake_ingester,
+        strategies=strategies,
+    )
+
+    assert len(repos) == 2

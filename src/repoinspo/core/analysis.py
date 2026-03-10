@@ -17,6 +17,7 @@ from repoinspo.models import (
     PortableIdea,
     RepoAnalysis,
     RepoComparison,
+    SearchStrategy,
     TokenBudget,
 )
 from repoinspo.prompts import (
@@ -26,6 +27,7 @@ from repoinspo.prompts import (
     COMPARE_REPOS_SHORT,
     EXTRACT_FEATURES_FULL,
     EXTRACT_FEATURES_SHORT,
+    GENERATE_SEARCH_STRATEGIES,
     PRIORITIZE_IDEAS_FULL,
     PRIORITIZE_IDEAS_SHORT,
 )
@@ -163,6 +165,40 @@ async def prioritize_ideas(
         completion_func=completion_func,
     )
     return [PortableIdea.model_validate(item) for item in data.get("prioritized_ideas", [])]
+
+
+async def generate_search_strategies(
+    seed_analysis: RepoAnalysis,
+    budget: TokenBudget,
+    settings: Settings | None = None,
+    completion_func: Any = acompletion,
+) -> list[SearchStrategy]:
+    """Generate diverse search strategies from seed analysis via LLM."""
+
+    if budget.remaining_tokens < 2000:
+        return []
+
+    payload = seed_analysis.model_dump(mode="json")
+    try:
+        data = await _json_completion(
+            prompt=GENERATE_SEARCH_STRATEGIES,
+            payload=payload,
+            budget=budget,
+            model=None,
+            settings=settings,
+            completion_func=completion_func,
+        )
+    except Exception as exc:
+        logger.warning("Search strategy generation failed; using static fallback", exc_info=exc)
+        return []
+
+    strategies = []
+    for item in data.get("strategies", []):
+        try:
+            strategies.append(SearchStrategy.model_validate(item))
+        except Exception:
+            logger.debug("Skipping invalid search strategy: %s", item)
+    return strategies
 
 
 def _parse_json_response(

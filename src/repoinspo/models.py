@@ -54,6 +54,9 @@ class RepoAnalysis(BaseModel):
     tech_stack: list[str] = Field(default_factory=list)
     notable_patterns: list[str] = Field(default_factory=list)
     summary: str | None = None
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    opportunities: list[str] = Field(default_factory=list)
 
 
 class ExtractedFeature(BaseModel):
@@ -90,6 +93,9 @@ class PortableIdea(BaseModel):
     rationale: str
     source_repo: str
     related_features: list[str] = Field(default_factory=list)
+    implementation_complexity: str | None = None
+    expected_impact: str | None = None
+    adaptation_notes: str | None = None
 
 
 class RepoComparison(BaseModel):
@@ -103,6 +109,16 @@ class RepoComparison(BaseModel):
     unique_to_a: list[str] = Field(default_factory=list)
     unique_to_b: list[str] = Field(default_factory=list)
     recommendation: str
+
+
+class SearchStrategy(BaseModel):
+    """An LLM-generated GitHub search strategy for cross-domain discovery."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    strategy_type: str  # "direct" | "lateral" | "conceptual"
+    rationale: str
 
 
 class SearchFilters(BaseModel):
@@ -155,6 +171,7 @@ class ScoutResult(BaseModel):
     feature_reports: list[FeatureExtractionResult] = Field(default_factory=list)
     prioritized_ideas: list[PortableIdea] = Field(default_factory=list)
     comparisons: list[RepoComparison] = Field(default_factory=list)
+    search_strategies: list[SearchStrategy] = Field(default_factory=list)
     budget: TokenBudget
     partial: bool = False
     notes: list[str] = Field(default_factory=list)

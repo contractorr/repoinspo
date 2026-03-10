@@ -14,12 +14,20 @@ from repoinspo.core.analysis import (
     analyze_repo,
     compare_repos,
     extract_features,
+    generate_search_strategies,
     prioritize_ideas,
 )
 from repoinspo.core.embeddings import EmbeddingIndex
 from repoinspo.core.github import GitHubClient
 from repoinspo.core.ingestion import DEFAULT_INGESTER, IngestCallable, ingest_repo
-from repoinspo.models import IngestedRepo, RepoMetadata, ScoutResult, SearchFilters, TokenBudget
+from repoinspo.models import (
+    IngestedRepo,
+    RepoMetadata,
+    ScoutResult,
+    SearchFilters,
+    SearchStrategy,
+    TokenBudget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +40,13 @@ async def find_similar_repos(
     github_client: GitHubClient | None = None,
     embedding_func: Any = aembedding,
     ingester: IngestCallable | None = None,
+    strategies: list[SearchStrategy] | None = None,
 ) -> list[RepoMetadata]:
-    """Find similar repositories using keyword search and embedding reranking."""
+    """Find similar repositories using keyword search and embedding reranking.
+
+    If strategies are provided, runs each strategy's query and merges results.
+    Falls back to static _build_search_query when no strategies are given.
+    """
 
     config = settings or get_settings()
     own_client = github_client is None
@@ -48,10 +61,32 @@ async def find_similar_repos(
             client,
             ingester=ingester,
         )
-        query = GitHubClient._build_search_query(seed.metadata, filters or SearchFilters())
-        search_limit = min(max(n * 5, 10), 100)
-        candidates = await client.search_repos(query, per_page=search_limit)
-        candidates = [repo for repo in candidates if repo.full_name != seed.metadata.full_name]
+
+        if strategies:
+            per_query_limit = min(max(n * 3, 10), 30)
+            search_tasks = [
+                client.search_repos(s.query, per_page=per_query_limit)
+                for s in strategies
+            ]
+            results = await asyncio.gather(*search_tasks, return_exceptions=True)
+            seen: set[str] = set()
+            candidates: list[RepoMetadata] = []
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.warning("Strategy search failed: %s", result)
+                    continue
+                for repo in result:
+                    if repo.full_name != seed.metadata.full_name and repo.full_name not in seen:
+                        seen.add(repo.full_name)
+                        candidates.append(repo)
+        else:
+            query = GitHubClient._build_search_query(seed.metadata, filters or SearchFilters())
+            search_limit = min(max(n * 5, 10), 100)
+            candidates = await client.search_repos(query, per_page=search_limit)
+            candidates = [
+                repo for repo in candidates if repo.full_name != seed.metadata.full_name
+            ]
+
         if not candidates:
             return []
 
@@ -115,6 +150,18 @@ async def scout_ideas(
             completion_func=completion_func,
         )
 
+        search_strategies = await generate_search_strategies(
+            seed_analysis,
+            token_budget,
+            settings=config,
+            completion_func=completion_func,
+        )
+        if search_strategies:
+            notes.append(
+                f"Generated {len(search_strategies)} search strategies "
+                f"({sum(1 for s in search_strategies if s.strategy_type == 'lateral')} lateral)."
+            )
+
         similar_repos = await find_similar_repos(
             repo_url=repo_url,
             n=effective_n,
@@ -123,6 +170,7 @@ async def scout_ideas(
             github_client=client,
             embedding_func=embedding_func,
             ingester=ingester,
+            strategies=search_strategies or None,
         )
 
         ingest_tasks = [
@@ -187,6 +235,7 @@ async def scout_ideas(
             feature_reports=feature_reports,
             prioritized_ideas=prioritized,
             comparisons=comparisons,
+            search_strategies=search_strategies,
             budget=token_budget,
             partial=bool(notes) or token_budget.exhausted,
             notes=notes,
